@@ -1,0 +1,1 @@
+docker run -d --name your_container_name --restart unless-stopped -p 8999:8999 -v ./Logs:/app/Logs reverse-proxy-py python main.py --port 8999 --gemini-api-key "your_api_key"

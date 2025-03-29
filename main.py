@@ -5,6 +5,7 @@ import json
 import logging
 from datetime import datetime
 import os
+import argparse
 
 # Cấu hình logging
 LOG_DIR = "Logs"
@@ -28,7 +29,6 @@ TARGET_APIS = {
     "/v1/chat/completions": "https://api.openai.com",
     "/v1beta/models/": "https://generativelanguage.googleapis.com",
 }
-GEMINI_API_KEY = "xxx"  # Thay bằng key thật
 
 
 async def log_request(request, target, response_status=None, response_body=None):
@@ -81,7 +81,6 @@ async def proxy_handler(request):
     )
     print(f"Proxying request to: {target_url}")
 
-    # Log request (chỉ khi cần thiết, sẽ kiểm tra sau)
     async with aiohttp.ClientSession() as session:
         try:
             async with session.request(
@@ -140,10 +139,26 @@ async def proxy_handler(request):
 
 
 # Khởi động server
-app = web.Application()
-app.router.add_route("*", "/{path:.*}", proxy_handler)
+def start_server(port, gemini_api_key):
+    global GEMINI_API_KEY
+    GEMINI_API_KEY = gemini_api_key
+
+    app = web.Application()
+    app.router.add_route("*", "/{path:.*}", proxy_handler)
+
+    print(f"Starting reverse proxy on port {port}...")
+    print("Targets:", TARGET_APIS)
+    web.run_app(app, host="0.0.0.0", port=port)
+
 
 if __name__ == "__main__":
-    print("Starting reverse proxy on port 8999...")
-    print("Targets:", TARGET_APIS)
-    web.run_app(app, host="0.0.0.0", port=8999)
+    parser = argparse.ArgumentParser(description="Reverse Proxy Server")
+    parser.add_argument(
+        "--port", type=int, default=8999, help="Port to run the server on"
+    )
+    parser.add_argument(
+        "--gemini-api-key", type=str, required=True, help="Gemini API key"
+    )
+    args = parser.parse_args()
+
+    start_server(args.port, args.gemini_api_key)
