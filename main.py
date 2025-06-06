@@ -6,6 +6,7 @@ import logging
 from datetime import datetime
 import os
 import argparse
+import urllib.parse
 
 # Cấu hình logging
 LOG_DIR = "Logs"
@@ -28,6 +29,7 @@ def setup_logger():
 TARGET_APIS = {
     "/v1/chat/completions": "https://api.openai.com",
     "/v1beta/models/": "https://generativelanguage.googleapis.com",
+    "/v1/messages": "https://api.anthropic.com",
 }
 
 
@@ -71,9 +73,8 @@ async def proxy_handler(request):
 
     # Chuẩn bị header và URL
     headers = {k: v for k, v in request.headers.items()}
-    headers["Host"] = (
-        "api.openai.com" if not is_gemini else "generativelanguage.googleapis.com"
-    )
+    parsed_url = urllib.parse.urlparse(target)
+    headers["Host"] = parsed_url.netloc
     body = await request.read()
 
     target_url = (
