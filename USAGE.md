@@ -119,6 +119,36 @@ curl http://localhost:8999/v1/chat/completions \
 | **Gemini** | Append `?key=<key>` vào URL |
 | **Claude** | Dùng header `x-api-key: <key>` |
 
+### Streaming Support
+
+Tất cả 3 providers đều hỗ trợ streaming với format OpenAI:
+
+```bash
+curl http://localhost:8999/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "model": "gemini-2.0-flash",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": true
+  }'
+```
+
+Response streaming format (SSE):
+```
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","choices":[{"delta":{"content":"Hello"}}]}
+
+data: {"id":"chatcmpl-...","object":"chat.completion.chunk","choices":[{"delta":{"content":"!"}}]}
+
+data: [DONE]
+```
+
+| Provider | Stream Endpoint | Cách xử lý |
+|----------|-----------------|------------|
+| OpenAI | `/v1/chat/completions` | Forward trực tiếp |
+| Gemini | `:streamGenerateContent?alt=sse` | Convert SSE → OpenAI format |
+| Claude | `/v1/messages` với `stream: true` | Convert SSE → OpenAI format |
+
 ---
 
 ## Cách gọi API Native (Legacy)

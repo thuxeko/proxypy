@@ -140,10 +140,10 @@ def detect_provider_from_model(model_name):
 
 
 def get_api_key_from_request(request):
-    """Lấy API key từ Authorization header: Bearer <key>"""
+    """Lấy API key từ Authorization header"""
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
-        return auth_header[7:]  # Bỏ "Bearer " prefix
+        return auth_header[7:]  # Bỏ "Bearer "
     return None
 
 
@@ -288,7 +288,7 @@ async def openai_compatible_handler(request):
     """Handler cho OpenAI-compatible endpoint /v1/chat/completions
     
     Proxy server chỉ là trạm trung chuyển (bypass region block).
-    Người dùng phải tự truyền API key của họ trong Authorization header.
+    Ngườ dùng phải tự truyền API key của họ trong Authorization header.
     """
     try:
         body = await request.json()
@@ -323,7 +323,7 @@ async def openai_compatible_handler(request):
         
         async with aiohttp.ClientSession() as session:
             if provider == "openai":
-                # Forward trực tiếp đến OpenAI với key của người dùng
+                # Forward trực tiếp đến OpenAI với key của ngườ dùng
                 headers = {
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json"
@@ -354,11 +354,11 @@ async def openai_compatible_handler(request):
                         )
             
             elif provider == "gemini":
-                # Convert và gọi Gemini với key của người dùng (append ?key= vào URL)
                 gemini_body = convert_openai_to_gemini(body)
-                model_name = model.replace("gemini-", "gemini-")  # Keep as-is
+                model_name = model.replace("gemini-", "gemini-")
                 
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                endpoint = "streamGenerateContent" if is_stream else "generateContent"
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:{endpoint}?key={api_key}&alt=sse"
                 
                 async with session.post(
                     url,
@@ -366,25 +366,59 @@ async def openai_compatible_handler(request):
                     json=gemini_body,
                     timeout=aiohttp.ClientTimeout(total=120)
                 ) as response:
-                    gemini_response = await response.read()
-                    
-                    if response.status != 200:
-                        return web.Response(
+                    if is_stream:
+                        resp = web.StreamResponse(
                             status=response.status,
-                            body=gemini_response,
+                            headers={"Content-Type": "text/event-stream"}
+                        )
+                        await resp.prepare(request)
+                        
+                        async for line in response.content:
+                            line_str = line.decode('utf-8').strip()
+                            if line_str.startswith('data: '):
+                                try:
+                                    data = json.loads(line_str[6:])
+                                    if "candidates" in data and len(data["candidates"]) > 0:
+                                        candidate = data["candidates"][0]
+                                        if "content" in candidate and "parts" in candidate["content"]:
+                                            for part in candidate["content"]["parts"]:
+                                                if "text" in part:
+                                                    openai_chunk = {
+                                                        "id": f"chatcmpl-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                                                        "object": "chat.completion.chunk",
+                                                        "created": int(datetime.now().timestamp()),
+                                                        "model": model,
+                                                        "choices": [{
+                                                            "index": 0,
+                                                            "delta": {"content": part["text"]},
+                                                            "finish_reason": None
+                                                        }]
+                                                    }
+                                                    chunk_line = f"data: {json.dumps(openai_chunk)}\n\n"
+                                                    await resp.write(chunk_line.encode('utf-8'))
+                                except:
+                                    pass
+                        await resp.write(b"data: [DONE]\n\n")
+                        await resp.write_eof()
+                        return resp
+                    else:
+                        gemini_response = await response.read()
+                        
+                        if response.status != 200:
+                            return web.Response(
+                                status=response.status,
+                                body=gemini_response,
+                                content_type="application/json"
+                            )
+                        
+                        openai_response = convert_gemini_to_openai(gemini_response, model)
+                        return web.Response(
+                            body=openai_response,
+                            status=200,
                             content_type="application/json"
                         )
-                    
-                    # Convert response về OpenAI format
-                    openai_response = convert_gemini_to_openai(gemini_response, model)
-                    return web.Response(
-                        body=openai_response,
-                        status=200,
-                        content_type="application/json"
-                    )
             
             elif provider == "claude":
-                # Convert và gọi Claude với key của người dùng (dùng x-api-key header)
                 claude_body = convert_openai_to_claude(body)
                 
                 headers = {
@@ -399,22 +433,71 @@ async def openai_compatible_handler(request):
                     json=claude_body,
                     timeout=aiohttp.ClientTimeout(total=120)
                 ) as response:
-                    claude_response = await response.read()
-                    
-                    if response.status != 200:
-                        return web.Response(
+                    if is_stream:
+                        resp = web.StreamResponse(
                             status=response.status,
-                            body=claude_response,
+                            headers={"Content-Type": "text/event-stream"}
+                        )
+                        await resp.prepare(request)
+                        
+                        async for line in response.content:
+                            line_str = line.decode('utf-8').strip()
+                            if line_str.startswith('data: '):
+                                try:
+                                    data = json.loads(line_str[6:])
+                                    event_type = data.get("type")
+                                    
+                                    if event_type == "content_block_delta":
+                                        delta = data.get("delta", {})
+                                        if delta.get("type") == "text_delta":
+                                            openai_chunk = {
+                                                "id": f"chatcmpl-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                                                "object": "chat.completion.chunk",
+                                                "created": int(datetime.now().timestamp()),
+                                                "model": model,
+                                                "choices": [{
+                                                    "index": 0,
+                                                    "delta": {"content": delta.get("text", "")},
+                                                    "finish_reason": None
+                                                }]
+                                            }
+                                            chunk_line = f"data: {json.dumps(openai_chunk)}\n\n"
+                                            await resp.write(chunk_line.encode('utf-8'))
+                                    elif event_type == "message_stop":
+                                        openai_chunk = {
+                                            "id": f"chatcmpl-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                                            "object": "chat.completion.chunk",
+                                            "created": int(datetime.now().timestamp()),
+                                            "model": model,
+                                            "choices": [{
+                                                "index": 0,
+                                                "delta": {},
+                                                "finish_reason": "stop"
+                                            }]
+                                        }
+                                        chunk_line = f"data: {json.dumps(openai_chunk)}\n\n"
+                                        await resp.write(chunk_line.encode('utf-8'))
+                                except:
+                                    pass
+                        await resp.write(b"data: [DONE]\n\n")
+                        await resp.write_eof()
+                        return resp
+                    else:
+                        claude_response = await response.read()
+                        
+                        if response.status != 200:
+                            return web.Response(
+                                status=response.status,
+                                body=claude_response,
+                                content_type="application/json"
+                            )
+                        
+                        openai_response = convert_claude_to_openai(claude_response, model)
+                        return web.Response(
+                            body=openai_response,
+                            status=200,
                             content_type="application/json"
                         )
-                    
-                    # Convert response về OpenAI format
-                    openai_response = convert_claude_to_openai(claude_response, model)
-                    return web.Response(
-                        body=openai_response,
-                        status=200,
-                        content_type="application/json"
-                    )
     
     except Exception as e:
         print(f"OpenAI Compatible Error: {str(e)}")
@@ -536,7 +619,6 @@ def start_server(port, allowed_ips=None):
     print(f"Starting reverse proxy on port {port}...")
     print("Legacy Targets:", TARGET_APIS)
     print("OpenAI-compatible endpoint: /v1/chat/completions")
-    print("Note: This is a BYPASS proxy. Users must provide their own API keys.")
     web.run_app(app, host="0.0.0.0", port=port)
 
 
