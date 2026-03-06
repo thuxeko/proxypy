@@ -1,6 +1,9 @@
 # Sử dụng một base image Python
 FROM python:3.9-slim
 
+# Cài đặt curl cho healthcheck
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
 # Thiết lập thư mục làm việc
 WORKDIR /app
 

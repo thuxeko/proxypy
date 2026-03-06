@@ -219,7 +219,15 @@ def start_server(port, allowed_ips=None):
     else:
         print("Warning: No IP whitelist configured. Allowing all IPs.")
 
+    async def health_handler(request):
+        return web.Response(
+            status=200,
+            body=json.dumps({"status": "ok"}),
+            content_type="application/json"
+        )
+
     app = web.Application(middlewares=[ip_whitelist_middleware])
+    app.router.add_get("/health", health_handler)
     app.router.add_route("*", "/{path:.*}", proxy_handler)
 
     print(f"Starting reverse proxy on port {port}...")

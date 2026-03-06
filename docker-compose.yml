@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  proxy:
+    build: .
+    image: proxy-server:latest
+    container_name: proxy-server
+    ports:
+      - "8999:8999"
+    volumes:
+      # Mount config.json để dễ dàng thay đổi IP mà không rebuild
+      - ./config.json:/app/config.json:ro
+      # Mount thư mục Logs ra ngoài
+      - ./Logs:/app/Logs
+    environment:
+      # Optional: Có thể override config.json bằng env variables
+      # - PROXY_PORT=8999
+      # - PROXY_ALLOWED_IPS=192.168.1.0/24,127.0.0.1
+      # - PROXY_CONFIG=/app/config.json
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8999/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
