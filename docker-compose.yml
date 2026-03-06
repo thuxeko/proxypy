@@ -12,7 +12,7 @@ services:
       - ./config.json:/app/config.json:ro
       # Mount thư mục Logs ra ngoài
       - ./Logs:/app/Logs
-    environment:
+    # environment:
       # Optional: Có thể override config.json bằng env variables
       # - PROXY_PORT=8999
       # - PROXY_ALLOWED_IPS=192.168.1.0/24,127.0.0.1
