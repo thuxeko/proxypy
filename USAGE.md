@@ -2,6 +2,8 @@
 
 Proxy server hỗ trợ 3 providers: OpenAI, Google Gemini và Anthropic Claude.
 
+> **⚠️ LƯU Ý QUAN TRỌNG:** Đây là **BYPASS PROXY** - chỉ là trạm trung chuyển để vượt qua region block. **Server KHÔNG lưu API key**. Người dùng phải tự truyền API key của họ trong mỗi request.
+
 ## Cấu hình
 
 ### 1. File `config.json` (khuyên dùng cho Docker)
@@ -55,7 +57,73 @@ python main.py --port 8999 --allow-ip 192.168.1.100 --allow-ip 192.168.1.0/24
 
 > **Lưu ý bảo mật:** Nếu không cấu hình `allowed_ips`, server sẽ chấp nhận request từ tất cả IP. **KHÔNG NÊN** khi deploy public!
 
-## Cách gọi API cho từng Provider
+---
+
+## OpenAI-Compatible Endpoint (Khuyên dùng)
+
+Endpoint `/v1/chat/completions` hỗ trợ **OpenAI format** cho cả 3 providers. Proxy tự động detect provider từ tên model và convert request/response.
+
+### Cách sử dụng
+
+```bash
+curl http://localhost:8999/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "model": "gemini-2.0-flash",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "temperature": 0.7,
+    "max_tokens": 1000
+  }'
+```
+
+### Mapping Model → Provider
+
+| Model Prefix | Provider | Ví dụ |
+|--------------|----------|-------|
+| `gpt-*` hoặc `o1*` hoặc `o3*` | OpenAI | `gpt-4o`, `o1-mini` |
+| `gemini-*` | Google Gemini | `gemini-2.0-flash` |
+| `claude-*` | Anthropic Claude | `claude-3-sonnet-20240229` |
+
+### Ví dụ cho từng Provider
+
+**Gemini (dùng Gemini API key):**
+```bash
+curl http://localhost:8999/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_GEMINI_API_KEY" \
+  -d '{"model": "gemini-2.0-flash", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+**Claude (dùng Claude API key):**
+```bash
+curl http://localhost:8999/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_CLAUDE_API_KEY" \
+  -d '{"model": "claude-3-sonnet-20240229", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+**OpenAI (dùng OpenAI API key):**
+```bash
+curl http://localhost:8999/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_OPENAI_API_KEY" \
+  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+### Cách Proxy xử lý API Key
+
+| Provider | Cách proxy gọi API |
+|----------|-------------------|
+| **OpenAI** | Dùng header `Authorization: Bearer <key>` |
+| **Gemini** | Append `?key=<key>` vào URL |
+| **Claude** | Dùng header `x-api-key: <key>` |
+
+---
+
+## Cách gọi API Native (Legacy)
+
+Nếu muốn gọi trực tiếp API native của từng provider:
 
 ### 1. OpenAI API
 
@@ -107,6 +175,8 @@ curl http://localhost:8999/v1/messages \
 
 **Lưu ý:** Proxy sẽ forward headers nguyên bản đến Anthropic.
 
+---
+
 ## Tóm tắt Routing
 
 | Provider | Path trên Proxy | Forward đến |
@@ -138,6 +208,8 @@ curl http://localhost:8999/v1/chat/completions \
 
 Các request với status != 200 sẽ được log vào thư mục `Logs/` theo ngày (định dạng JSON).
 
+---
+
 ## Docker
 
 ### Build
@@ -146,18 +218,7 @@ Các request với status != 200 sẽ được log vào thư mục `Logs/` theo 
 docker build -t proxy-server .
 ```
 
-### Run với config file
-
-```bash
-# Mount config.json vào container
-docker run -d \
-  -p 8999:8999 \
-  -v $(pwd)/config.json:/app/config.json \
-  --name proxy-server \
-  proxy-server
-```
-
-### Run với environment variables
+### Run
 
 ```bash
 docker run -d \
@@ -179,10 +240,9 @@ services:
     ports:
       - "8999:8999"
     volumes:
-      - ./config.json:/app/config.json
       - ./Logs:/app/Logs
     environment:
-      # Optional: override config file
+      - PROXY_PORT=8999
       - PROXY_ALLOWED_IPS=192.168.1.0/24,127.0.0.1
     restart: unless-stopped
 ```
