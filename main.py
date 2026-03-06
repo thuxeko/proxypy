@@ -7,6 +7,82 @@ from datetime import datetime
 import os
 import argparse
 import urllib.parse
+from ipaddress import ip_network, ip_address
+
+# Danh sách IP cho phép (global)
+ALLOWED_IPS = []
+
+
+def load_config(config_path=None):
+    """Load cấu hình từ file JSON hoặc env variable"""
+    config = {
+        "allowed_ips": [],
+        "port": 8999
+    }
+    
+    # Lấy đường dẫn config từ env hoặc tham số
+    if config_path is None:
+        config_path = os.environ.get("PROXY_CONFIG", "config.json")
+    
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r") as f:
+                file_config = json.load(f)
+                config.update(file_config)
+            print(f"Loaded config from: {config_path}")
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Warning: Failed to load config from {config_path}: {e}")
+    else:
+        print(f"Warning: Config file not found: {config_path}")
+    
+    # Env variable PROXY_ALLOWED_IPS override config file
+    env_ips = os.environ.get("PROXY_ALLOWED_IPS")
+    if env_ips:
+        config["allowed_ips"] = [ip.strip() for ip in env_ips.split(",") if ip.strip()]
+        print(f"Using allowed_ips from PROXY_ALLOWED_IPS env: {config['allowed_ips']}")
+    
+    # Env variable PORT override config file
+    env_port = os.environ.get("PROXY_PORT")
+    if env_port:
+        try:
+            config["port"] = int(env_port)
+            print(f"Using port from PROXY_PORT env: {config['port']}")
+        except ValueError:
+            print(f"Warning: Invalid PROXY_PORT value: {env_port}")
+    
+    return config
+
+
+def is_ip_allowed(client_ip):
+    """Kiểm tra IP có trong danh sách cho phép không"""
+    if not ALLOWED_IPS:  # Nếu không cấu hình IP nào thì cho phép tất cả
+        return True
+    try:
+        client = ip_address(client_ip)
+        for allowed in ALLOWED_IPS:
+            if "/" in allowed:  # CIDR notation (vd: 192.168.1.0/24)
+                if client in ip_network(allowed, strict=False):
+                    return True
+            else:  # Single IP
+                if client == ip_address(allowed):
+                    return True
+        return False
+    except ValueError:
+        return False
+
+
+@web.middleware
+async def ip_whitelist_middleware(request, handler):
+    """Middleware kiểm tra IP whitelist"""
+    client_ip = request.remote
+    if not is_ip_allowed(client_ip):
+        print(f"Blocked request from IP: {client_ip}")
+        return web.Response(
+            status=403,
+            body=json.dumps({"error": "Forbidden", "message": f"IP {client_ip} not allowed"}),
+            content_type="application/json"
+        )
+    return await handler(request)
 
 # Cấu hình logging
 LOG_DIR = "Logs"
@@ -53,13 +129,10 @@ async def proxy_handler(request):
     # Xác định target
     path = str(request.rel_url)
     target = None
-    is_gemini = False
 
     for prefix, api_target in TARGET_APIS.items():
         if path.startswith(prefix):
             target = api_target
-            if prefix == "/v1beta/models/":
-                is_gemini = True
             break
 
     if target is None:
@@ -77,9 +150,7 @@ async def proxy_handler(request):
     headers["Host"] = parsed_url.netloc
     body = await request.read()
 
-    target_url = (
-        f"{target}{path}" if not is_gemini else f"{target}{path}&key={GEMINI_API_KEY}"
-    )
+    target_url = f"{target}{path}"
     print(f"Proxying request to: {target_url}")
 
     async with aiohttp.ClientSession() as session:
@@ -92,7 +163,7 @@ async def proxy_handler(request):
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as response:
                 # Kiểm tra streaming từ OpenAI
-                is_stream = not is_gemini and "stream" in (await request.text()).lower()
+                is_stream = "stream" in (await request.text()).lower()
 
                 if is_stream:
                     resp = web.StreamResponse(
@@ -140,11 +211,15 @@ async def proxy_handler(request):
 
 
 # Khởi động server
-def start_server(port, gemini_api_key):
-    global GEMINI_API_KEY
-    GEMINI_API_KEY = gemini_api_key
+def start_server(port, allowed_ips=None):
+    global ALLOWED_IPS
+    if allowed_ips:
+        ALLOWED_IPS = allowed_ips
+        print(f"Allowed IPs: {ALLOWED_IPS}")
+    else:
+        print("Warning: No IP whitelist configured. Allowing all IPs.")
 
-    app = web.Application()
+    app = web.Application(middlewares=[ip_whitelist_middleware])
     app.router.add_route("*", "/{path:.*}", proxy_handler)
 
     print(f"Starting reverse proxy on port {port}...")
@@ -155,11 +230,30 @@ def start_server(port, gemini_api_key):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Reverse Proxy Server")
     parser.add_argument(
-        "--port", type=int, default=8999, help="Port to run the server on"
+        "--config",
+        type=str,
+        default=None,
+        help="Path to config JSON file (default: PROXY_CONFIG env or config.json)"
     )
     parser.add_argument(
-        "--gemini-api-key", type=str, required=True, help="Gemini API key"
+        "--port",
+        type=int,
+        default=None,
+        help="Port to run the server on (override config file)"
+    )
+    parser.add_argument(
+        "--allow-ip",
+        type=str,
+        action="append",
+        help="Allowed IP address or CIDR, can be specified multiple times (override config file)"
     )
     args = parser.parse_args()
 
-    start_server(args.port, args.gemini_api_key)
+    # Load config từ file
+    config = load_config(args.config)
+    
+    # Command line args override config file
+    port = args.port if args.port is not None else config["port"]
+    allowed_ips = args.allow_ip if args.allow_ip is not None else config["allowed_ips"]
+    
+    start_server(port, allowed_ips)

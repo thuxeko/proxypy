@@ -14,8 +14,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Thiết lập biến môi trường
-ENV PORT=8999
-ENV GEMINI_API_KEY=xxx
+ENV PROXY_PORT=8999
+# ENV PROXY_ALLOWED_IPS=192.168.1.0/24,10.0.0.5
+# ENV PROXY_CONFIG=/app/config.json
 
 # Chạy ứng dụng khi container khởi động
-CMD ["sh", "-c", "python main.py --port $PORT --gemini-api-key $GEMINI_API_KEY"]
+CMD ["python", "main.py"]
